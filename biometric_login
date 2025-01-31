@@ -1,0 +1,111 @@
+class LoginController extends GetxController {
+  String? email, password;
+  final RxBool isLoading = false.obs;
+  final formKey = GlobalKey<FormState>();
+  final LocalAuthentication auth = LocalAuthentication();
+  final RxBool useBiometricAuth = false.obs;
+
+  final User dummyUser = User(email: "test@gmail.com", password: "1234");
+
+  // Variables to track biometric authentication attempts
+  int biometricAttempts = 0;
+  Timer? lockoutTimer;
+  final int maxAttempts = 5;
+  final Duration lockoutDuration = Duration(minutes: 5);
+  bool isLockedOut = false;
+
+  void login() async {
+    if (formKey.currentState != null) {
+      if (!formKey.currentState!.validate()) return;
+      formKey.currentState!.save();
+    }
+
+    isLoading.value = true;
+
+    if (useBiometricAuth.value) {
+      await authenticate();
+    } else {
+      await _emailPasswordLogin();
+    }
+  }
+
+  Future<void> _emailPasswordLogin() async {
+    if (email == null || password == null) {
+      Get.snackbar('Error', 'Please enter your email and password.');
+      return;
+    }
+
+    Get.dialog(const LoadingSpinner(), barrierDismissible: false);
+    await Future.delayed(const Duration(seconds: 2));
+    Get.back();
+
+    if (email == dummyUser.email && password == dummyUser.password) {
+      Get.toNamed(AppRoutes.home);
+    } else {
+      Get.defaultDialog(
+        title: 'Login Failed',
+        middleText: 'Invalid email or password.',
+        textCancel: 'Try Again',
+      );
+    }
+    isLoading.value = false;
+  }
+
+  Future<bool?> authenticate() async {
+    if (isLockedOut) {
+      Toaster.showToast('Too many failed attempts. Please try again later.');
+      return null;
+    }
+
+    final hasBiometric = await auth.canCheckBiometrics;
+    if (hasBiometric) {
+      try {
+        bool isAuthenticated = await auth.authenticate(
+          localizedReason: "Scan fingerprint to authenticate",
+          options: const AuthenticationOptions(
+            useErrorDialogs: true,
+            stickyAuth: true,
+            biometricOnly: true,
+          ),
+        );
+
+        if (isAuthenticated) {
+          Toaster.showToast('Authentication successful');
+          biometricAttempts = 0; // Reset attempts on success
+          Get.toNamed(AppRoutes.home);
+          return true;
+        } else {
+          biometricAttempts++;
+          Toaster.showToast('Authentication failed');
+
+          if (biometricAttempts >= maxAttempts) {
+            isLockedOut = true;
+            Toaster.showToast(
+                'Too many failed attempts. Please wait 5 minutes.');
+            startLockoutTimer();
+          }
+          return false;
+        }
+      } catch (e) {
+        Debug.log('Error: $e');
+      }
+    } else {
+      Toaster.showToast('Biometrics not available on this device');
+    }
+    return null;
+  }
+
+  void startLockoutTimer() {
+    lockoutTimer = Timer(lockoutDuration, () {
+      isLockedOut = false;
+      biometricAttempts = 0; // Reset attempts after lockout
+      Toaster.showToast('You can try biometric authentication again.');
+    });
+  }
+
+  @override
+  void onClose() {
+    lockoutTimer?.cancel(); // Cancel the timer if the controller is disposed
+    super.onClose();
+  }
+}
